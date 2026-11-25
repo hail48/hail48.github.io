@@ -77,6 +77,27 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .now .bar { height: 3px; background: var(--hair); margin-top: 6px; }
 .now .bar b { display: block; height: 100%; background: var(--rail); width: 0; }
 .big { font: var(--hw) 40px/1.2 var(--head); padding: 6px 0; }
+/* شريط التنقل: القادم، الأيام، البحث */
+.nav { position: sticky; top: 0; z-index: 5; background: var(--bg); margin-inline: -18px; padding-inline: 18px; padding-top: env(safe-area-inset-top, 0px); }
+.tabs { display: flex; align-items: stretch; gap: 2px; border-bottom: 1px solid var(--hair); overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { flex: none; min-height: 44px; border: 0; background: transparent; padding: 0 7px; color: var(--mute); font-weight: 700; font-size: 15px; border-bottom: 3px solid transparent; margin-bottom: -1px; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--rail); }
+.tabs .sb { margin-inline-start: auto; width: 44px; padding: 0; display: grid; place-items: center; }
+.tabs .sb svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+.sbox { padding: 10px 0 8px; }
+.sbox input { width: 100%; border: 0; border-bottom: 2px solid var(--rail); background: transparent; color: var(--ink); font: 600 18px/1.4 var(--body); padding: 6px 2px; outline: none; border-radius: 0; direction: rtl; }
+.sbox input::placeholder { color: var(--mute); font-weight: 500; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.chips button { border: 1px solid var(--hair); background: transparent; border-radius: 99px; padding: 3px 14px 5px; font-weight: 700; font-size: 15px; color: var(--ink); }
+.hint { color: var(--mute); font-weight: 700; font-size: 14px; margin: 0 0 14px; padding-inline: 2px; }
+.empty { color: var(--mute); font-weight: 700; font-size: 18px; padding: 24px 2px; }
+mark { background: transparent; color: inherit; border-bottom: 3px solid var(--rail); }
+.row.past .lab, .row.past .it { opacity: .4; }
+.dotc { position: absolute; left: 50%; top: 10px; width: 14px; height: 14px; transform: translateX(-50%); border-radius: 50%; background: var(--rail); box-shadow: 0 0 0 4px var(--bg); }
+.tg { font-style: normal; font-weight: 800; font-size: 12px; padding: 0 9px 2px; border-radius: 99px; background: var(--hair); color: var(--ink); margin-inline-start: 4px; }
+.tg.now { background: var(--rail); color: var(--on); }
+.row.dh .it { padding-bottom: 12px; }
 .more { justify-self: start; border: 0; background: transparent; color: var(--ink); font-weight: 800; border-bottom: 2px solid var(--rail); padding: 0 0 2px; }
 .dots { height: 80px; width: 150px; background: radial-gradient(var(--rail) 1.3px, transparent 1.6px) 0 0 / 12px 12px; opacity: .35; }
 .foot { display: grid; gap: 14px; color: var(--mute); font-size: 13px; font-weight: 500; }
@@ -94,6 +115,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
     <div class="who"><div class="logo" role="img" aria-label="شعار حائل ذرية ناصر الصالح ١٤٤٨هـ"></div><div><b>رحلة حائل</b><small id="range"></small></div></div>
     <div class="clock" id="clock"></div>
   </header>
+  <nav class="nav" id="nav" aria-label="تنقل"></nav>
   <main id="app"></main>
   <div class="dots" aria-hidden="true"></div>
   <footer class="foot">
@@ -147,35 +169,77 @@ function durLines(min, pre) {
 const dayWord = (it, ms) => { const d = DATA.days[it.di], today = Math.floor(ms / 864e5) * 864e5; return d.base === today ? 'اليوم' : d.base === today + 864e5 ? 'غدًا' : d.name; };
 const dayLab = (d) => `<b>${esc(d.name)}</b><small>${esc(d.gday)}<br>${esc(d.title)}</small>`;
 
+// ---------- حالة التنقل ----------
+let mode = 'next', qtext = '', pendingScroll = false;
+const NORMMAP = { 'أ': 'ا', 'إ': 'ا', 'آ': 'ا', 'ٱ': 'ا', 'ى': 'ي', 'ة': 'ه', 'ؤ': 'و', 'ئ': 'ي' };
+const norm = (t) => String(t).replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[أإآٱىةؤئ]/g, (c) => NORMMAP[c]).toLowerCase();
+function hilite(text, toks) {
+  const n = norm(text), mask = new Array(text.length).fill(false);
+  toks.forEach((tk) => { let i = n.indexOf(tk); while (i >= 0) { for (let k = i; k < i + tk.length; k++) mask[k] = true; i = n.indexOf(tk, i + tk.length); } });
+  let out = '', open = false;
+  for (let k = 0; k < text.length; k++) { if (mask[k] && !open) { out += '<mark>'; open = true; } if (!mask[k] && open) { out += '</mark>'; open = false; } out += esc(text[k]); }
+  return out + (open ? '</mark>' : '');
+}
+const dayHead = (di) => `<div class="row dh"><div class="lab">${dayLab(DATA.days[di])}</div><div class="rl"><i class="ring"></i></div><div class="it"></div></div>`;
+function itemRow(it, c, toks) {
+  const t = label(it.m), s = c.cur && c.cur.k === it.k ? 'cur' : it.end <= c.ms ? 'past' : c.next && c.next.k === it.k ? 'nx' : '';
+  const tag = s === 'cur' ? '<em class="tg now">الآن</em>' : s === 'nx' ? '<em class="tg">التالي</em>' : '';
+  return `<div class="row ${s}"${s === 'cur' || s === 'nx' ? ' data-focus' : ''}><div class="lab"></div><div class="rl"><i class="${s === 'cur' ? 'dotc' : 'tick'}"></i></div><div class="it"><div class="t num"><b>${t.t}</b><span>${t.ap}</span>${tag}</div><div class="nm">${toks ? hilite(it.n, toks) : esc(it.n)}</div></div></div>`;
+}
+function nextView(c) {
+  const { ms, cur, next, phase } = c;
+  if (phase === 'after') return `<div class="big">انتهت الرحلة، شكرًا لحضوركم</div>`;
+  if (!next) return `<div class="big">هذا آخر برنامج: ${esc(cur.n)}</div>`;
+  const t = label(next.m), pct = cur ? Math.min(100, Math.max(0, ((ms - cur.st) / (cur.end - cur.st)) * 100)) : 0;
+  let html = `<div class="row next first"><div class="lab"><div class="circ"><div class="tm num"><b>${t.t}</b><span>${t.ap}</span></div><div class="cd">${durLines((next.st - ms) / 60000, phase === 'before' ? 'يبدأ بعد' : 'بعد')}</div></div></div>
+      <div class="rl"><i class="ring"></i></div>
+      <div class="it"><div class="kick">${phase === 'before' ? 'أول برنامج' : 'التالي'} · ${esc(dayWord(next, ms))}</div><h1>${esc(next.n)}</h1>${cur ? `<div class="now"><i></i>الآن: ${esc(cur.n)}<div class="bar" role="progressbar" aria-label="تقدّم البرنامج الحالي" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}"><b style="width:${pct}%"></b></div></div>` : ''}</div></div>`;
+  const rest = flat.filter((it) => it.k > next.k), shown = showAll ? rest : rest.slice(0, 7);
+  let prev = next.di;
+  shown.forEach((it) => {
+    const t2 = label(it.m), newDay = it.di !== prev; prev = it.di;
+    html += `<div class="row"><div class="lab">${newDay ? dayLab(DATA.days[it.di]) : ''}</div><div class="rl">${newDay ? '<i class="ring"></i>' : '<i class="tick"></i>'}</div>
+        <div class="it"><div class="t num"><b>${t2.t}</b><span>${t2.ap}</span></div><div class="nm">${esc(it.n)}</div></div></div>`;
+  });
+  if (rest.length > 7) html += `<button class="more" id="more">${showAll ? 'إخفاء' : `عرض الباقي (${ar(rest.length - 7)})`}</button>`;
+  return html;
+}
+function dayView(c, di) { return dayHead(di) + DATA.days[di].items.map((it) => itemRow(it, c)).join(''); }
+const CHIPS = ['قهوة', 'غداء', 'عشاء', 'صلاة', 'قلعة', 'شويهي', 'ثقافي', 'النوم'];
+function searchView(c) {
+  const toks = norm(qtext).replace(/[ً-ٰٟـ]/g, '').split(/\s+/).filter(Boolean);
+  if (!toks.length) return `<p class="hint">اكتب اسم البرنامج، أو اختر كلمة:</p><div class="chips">${CHIPS.map((w) => `<button data-q="${w}">${w}</button>`).join('')}</div>`;
+  const res = flat.filter((it) => { const h = norm(DATA.days[it.di].name + ' ' + it.n); return toks.every((tk) => h.includes(tk)); });
+  if (!res.length) return `<div class="empty">ما وجدت برنامجًا بهذا الاسم</div>`;
+  let html = `<p class="hint num">${res.length === 1 ? 'نتيجة واحدة' : `${ar(res.length)} نتيجة`}</p>`, prev = -1;
+  res.forEach((it) => { if (it.di !== prev) { prev = it.di; html += dayHead(it.di); } html += itemRow(it, c, toks); });
+  return html;
+}
+function renderNav() {
+  const tab = (m, name) => `<button role="tab" aria-selected="${mode === m}" data-m="${m}">${name}</button>`;
+  $('nav').innerHTML = `<div class="tabs" role="tablist" aria-label="العرض">${tab('next', 'القادم')}${DATA.days.map((d, i) => tab(String(i), esc(d.name))).join('')}<button class="sb" role="tab" aria-selected="${mode === 'search'}" data-m="search" aria-label="بحث"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg></button></div>${mode === 'search' ? '<div class="sbox"><input id="q" type="search" placeholder="ابحث عن برنامج، مثل: غداء، قلعة" autocomplete="off" enterkeyhint="search" aria-label="بحث عن برنامج"></div>' : ''}`;
+  document.querySelectorAll('#nav [data-m]').forEach((b) => b.addEventListener('click', () => {
+    const m = b.dataset.m; if (m === mode && m !== 'search') return;
+    mode = m; if (m !== 'search') qtext = ''; showAll = false;
+    pendingScroll = /^\d+$/.test(m); renderNav(); render(); if (!pendingScroll) window.scrollTo({ top: 0 });
+    if (m === 'search') { const q = $('q'); q.value = qtext; q.focus(); }
+  }));
+  const q = $('q'); if (q) { q.value = qtext; q.addEventListener('input', () => { qtext = q.value; render(); }); }
+}
 function render() {
   const ms = nowMs();
   let cur = null, next = null, phase = 'live';
   if (ms < flat[0].st) { phase = 'before'; next = flat[0]; }
   else if (ms >= flat.at(-1).end) phase = 'after';
   else { cur = flat.find((it) => ms >= it.st && ms < it.end); next = flat[cur.k + 1] || null; }
+  const c = { ms, cur, next, phase };
   const nd = new Date(ms), l0 = label(nd.getUTCHours() * 60 + nd.getUTCMinutes()), di = DATA.days.findIndex((d) => ms >= d.base && ms < d.base + 864e5);
   $('range').textContent = west(DATA.range.split(' · ')[0]);
   $('clock').innerHTML = `<b class="num">${l0.t} ${l0.ap}</b>${di >= 0 ? esc(DATA.days[di].name) + ' · ' + esc(DATA.days[di].gday) : ''}`;
-
-  let html = '';
-  if (phase === 'after') html = `<div class="big">انتهت الرحلة، شكرًا لحضوركم</div>`;
-  else if (!next) html = `<div class="big">هذا آخر برنامج: ${esc(cur.n)}</div>`;
-  else {
-    const t = label(next.m), pct = cur ? Math.min(100, Math.max(0, ((ms - cur.st) / (cur.end - cur.st)) * 100)) : 0;
-    html += `<div class="row next first"><div class="lab"><div class="circ"><div class="tm num"><b>${t.t}</b><span>${t.ap}</span></div><div class="cd">${durLines((next.st - ms) / 60000, phase === 'before' ? 'يبدأ بعد' : 'بعد')}</div></div></div>
-      <div class="rl"><i class="ring"></i></div>
-      <div class="it"><div class="kick">${phase === 'before' ? 'أول برنامج' : 'التالي'} · ${esc(dayWord(next, ms))}</div><h1>${esc(next.n)}</h1>${cur ? `<div class="now"><i></i>الآن: ${esc(cur.n)}<div class="bar" role="progressbar" aria-label="تقدّم البرنامج الحالي" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pct)}"><b style="width:${pct}%"></b></div></div>` : ''}</div></div>`;
-    const rest = flat.filter((it) => it.k > next.k), shown = showAll ? rest : rest.slice(0, 7);
-    let prev = next.di;
-    shown.forEach((it) => {
-      const t = label(it.m), newDay = it.di !== prev; prev = it.di;
-      html += `<div class="row"><div class="lab">${newDay ? dayLab(DATA.days[it.di]) : ''}</div><div class="rl">${newDay ? '<i class="ring"></i>' : '<i class="tick"></i>'}</div>
-        <div class="it"><div class="t num"><b>${t.t}</b><span>${t.ap}</span></div><div class="nm">${esc(it.n)}</div></div></div>`;
-    });
-    if (rest.length > 7) html += `<button class="more" id="more">${showAll ? 'إخفاء' : `عرض الباقي (${ar(rest.length - 7)})`}</button>`;
-  }
-  $('app').innerHTML = html;
+  $('app').innerHTML = mode === 'next' ? nextView(c) : mode === 'search' ? searchView(c) : dayView(c, Number(mode));
+  document.querySelectorAll('#app [data-q]').forEach((b) => b.addEventListener('click', () => { qtext = b.dataset.q; const q = $('q'); if (q) q.value = qtext; render(); }));
   const m = $('more'); if (m) m.addEventListener('click', () => { showAll = !showAll; render(); });
+  if (pendingScroll) { pendingScroll = false; const f = document.querySelector('#app [data-focus]'); if (f) setTimeout(() => f.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }), 60); }
   renderDemo();
 }
 const SEL = [['real', 'الوقت الحقيقي'], ['2026-11-25T17:00', 'الأربعاء ٥ م'], ['2026-11-26T09:10', 'الخميس ٩:١٠ ص'], ['2026-11-27T15:55', 'الجمعة ٣:٥٥ م'], ['2026-11-28T12:30', 'السبت ١٢:٣٠ م']];
@@ -202,10 +266,12 @@ if (P.get('theme')) document.documentElement.dataset.theme = P.get('theme');
 setPal(!CHOOSERS ? 'sand' : PALS.some((x) => x[0] === P.get('pal')) ? P.get('pal') : PALS.some((x) => x[0] === keep.get('hail-pal2')) ? keep.get('hail-pal2') : 'sand');
 if (P.get('t')) setFixed(P.get('t'));
 else if (CHOOSERS && nowMs() < flat[0].st) setFixed('2026-11-26T09:10');   // قبل الرحلة: نبدأ بوقت عرض ليرى المنظّم الحالة الحية
+if (P.get('q')) { mode = 'search'; qtext = P.get('q'); } else if (P.get('m') === 'search' || /^\d+$/.test(P.get('m') || '')) { mode = P.get('m'); pendingScroll = mode !== 'search'; }
+renderNav();
 render();
 setInterval(render, 30000);
 if (!CHOOSERS) {
-  const load = () => fetch('schedule.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((j) => { if (j && Array.isArray(j.days) && j.days.length && JSON.stringify(j) !== JSON.stringify(DATA0)) { DATA = j; DATA0 = JSON.parse(JSON.stringify(j)); prep(); render(); } }).catch(() => {});
+  const load = () => fetch('schedule.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((j) => { if (j && Array.isArray(j.days) && j.days.length && JSON.stringify(j) !== JSON.stringify(DATA0)) { DATA = j; DATA0 = JSON.parse(JSON.stringify(j)); prep(); renderNav(); render(); } }).catch(() => {});
   var DATA0 = JSON.parse(JSON.stringify(DATA));
   load(); setInterval(load, 120000);
 }
